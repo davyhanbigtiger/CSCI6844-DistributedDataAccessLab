@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OrderService.Api.Data;
+using OrderService.Api.DTOs;           // ← 新增
 using OrderService.Api.Messaging;
 using OrderService.Api.Models;
 using OrderService.Api.Services;
@@ -32,34 +33,49 @@ public class OrdersController : ControllerBase
     public async Task<IActionResult> GetAll(CancellationToken ct)
     {
         var orders = await _context.Orders.ToListAsync(ct);
-        return Ok(orders);
+        // 返回 DTO 列表
+        var response = orders.Select(o => new OrderResponseDto(
+            o.Id, o.CustomerId, o.ProductId,
+            o.Quantity, o.TotalAmount, o.Status, o.CreatedAt));
+        return Ok(response);
     }
 
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<Order>> GetById(int id, CancellationToken ct)
+    public async Task<IActionResult> GetById(int id, CancellationToken ct)
     {
         var order = await _context.Orders.FirstOrDefaultAsync(o => o.Id == id, ct);
         if (order == null) return NotFound();
-        return Ok(order);
+        return Ok(new OrderResponseDto(
+            order.Id, order.CustomerId, order.ProductId,
+            order.Quantity, order.TotalAmount, order.Status, order.CreatedAt));
     }
 
     [HttpPost]
-    public async Task<ActionResult<Order>> Create([FromBody] Order order, CancellationToken ct)
+    public async Task<IActionResult> Create([FromBody] CreateOrderDto dto, CancellationToken ct)
     {
-        var customerExists = await _customerClient.CustomerExistsAsync(order.CustomerId);
+        // 验证 customer 和 product 是否存在（同步 HTTP 调用，和原来一样）
+        var customerExists = await _customerClient.CustomerExistsAsync(dto.CustomerId);
         if (!customerExists)
-            return BadRequest(new { error = "Customer does not exist.", customerId = order.CustomerId });
+            return BadRequest(new { error = "Customer does not exist.", customerId = dto.CustomerId });
 
-        var productExists = await _productClient.ProductExistsAsync(order.ProductId);
+        var productExists = await _productClient.ProductExistsAsync(dto.ProductId);
         if (!productExists)
-            return BadRequest(new { error = "Product does not exist.", productId = order.ProductId });
+            return BadRequest(new { error = "Product does not exist.", productId = dto.ProductId });
 
-        order.Status = "Created";
-        order.CreatedAt = DateTime.UtcNow;
+        // DTO → Entity
+        var order = new Order
+        {
+            CustomerId = dto.CustomerId,
+            ProductId = dto.ProductId,
+            Quantity = dto.Quantity,
+            Status = "Created",
+            CreatedAt = DateTime.UtcNow
+        };
 
         await _context.Orders.AddAsync(order, ct);
         await _context.SaveChangesAsync(ct);
 
+        // 发布 OrderCreated 事件（和原来一样）
         _publisher.Publish(new OrderCreatedEvent
         {
             OrderId = order.Id,
@@ -68,6 +84,34 @@ public class OrdersController : ControllerBase
             CreatedAt = order.CreatedAt
         });
 
-        return CreatedAtAction(nameof(GetById), new { id = order.Id }, order);
+        var response = new OrderResponseDto(
+            order.Id, order.CustomerId, order.ProductId,
+            order.Quantity, order.TotalAmount, order.Status, order.CreatedAt);
+        return CreatedAtAction(nameof(GetById), new { id = order.Id }, response);
+    }
+
+        [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Cancel(int id, CancellationToken ct)
+    {
+        var order = await _context.Orders.FirstOrDefaultAsync(o => o.Id == id, ct);
+        if (order == null) return NotFound();
+        if (order.Status == "Cancelled")
+            return BadRequest(new { error = "Order is already cancelled." });
+
+        order.Status = "Cancelled";
+        await _context.SaveChangesAsync(ct);
+
+        // 发布 OrderCancelled 事件 → ProductService 会恢复库存
+        _publisher.Publish(new OrderCancelledEvent
+        {
+            OrderId = order.Id,
+            ProductId = order.ProductId,
+            Quantity = order.Quantity,
+            CancelledAt = DateTime.UtcNow
+        });
+
+        return Ok(new OrderResponseDto(
+            order.Id, order.CustomerId, order.ProductId,
+            order.Quantity, order.TotalAmount, order.Status, order.CreatedAt));
     }
 }

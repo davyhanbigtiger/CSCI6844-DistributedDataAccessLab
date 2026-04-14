@@ -15,6 +15,10 @@ builder.Services.AddDbContext<ProductDbContext>(options =>
 // RabbitMQ Consumer（后台订阅者）
 builder.Services.AddHostedService<OrderCreatedConsumer>();
 
+builder.Services.AddHostedService<OrderCreatedConsumer>();
+builder.Services.AddHostedService<OrderCancelledConsumer>();  // ← 新增
+
+
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())

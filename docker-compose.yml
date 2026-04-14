@@ -1,5 +1,8 @@
 services:
 
+  # ========================================================
+  # MESSAGE BROKER
+  # ========================================================
   rabbitmq:
     container_name: rabbitmq
     image: rabbitmq:3-management
@@ -15,13 +18,41 @@ services:
       timeout: 5s
       retries: 5
 
+  # ========================================================
+  # API GATEWAY - Single entry point for all client requests
+  # Routes: /customers/** /products/** /orders/**
+  # Aggregation: /api/aggregate/order-details/{id}
+  # ========================================================
+  api-gateway:
+    container_name: api-gateway
+    build:
+      context: ./ApiGateway
+      dockerfile: Dockerfile
+    ports:
+      - "5000:8080"                             # 唯一对外暴露的端口
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      customerservice:
+        condition: service_started
+      productservice:
+        condition: service_started
+      orderservice:
+        condition: service_started
+
+  # ========================================================
+  # CUSTOMER SERVICE
+  # ========================================================
   customerservice:
-    container_name: customerservice
+    container_name: customer-service
     build:
       context: ./CustomerService/CustomerService.Api
       dockerfile: Dockerfile
-    ports:
-      - "5001:8080"
+    expose:
+      - "8080"                                  # 只在内网可见，不对外暴露
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
@@ -31,13 +62,16 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  # ========================================================
+  # PRODUCT SERVICE
+  # ========================================================
   productservice:
-    container_name: productservice
+    container_name: product-service
     build:
       context: ./ProductService/ProductService.Api
       dockerfile: Dockerfile
-    ports:
-      - "5003:8080"
+    expose:
+      - "8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
@@ -48,18 +82,21 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  # ========================================================
+  # ORDER SERVICE
+  # ========================================================
   orderservice:
-    container_name: orderservice
+    container_name: order-service
     build:
       context: ./OrderService/OrderService.Api
       dockerfile: Dockerfile
-    ports:
-      - "5002:8080"
+    expose:
+      - "8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
-      CustomerServiceUrl: http://customerservice:8080/
-      ProductServiceUrl: http://productservice:8080/
+      CustomerServiceUrl: http://customer-service:8080/
+      ProductServiceUrl: http://product-service:8080/
       RabbitMQ__Host: rabbitmq
     volumes:
       - ./data/orders:/app/data
@@ -71,13 +108,16 @@ services:
       productservice:
         condition: service_started
 
+  # ========================================================
+  # NOTIFICATION SERVICE
+  # ========================================================
   notificationservice:
-    container_name: notificationservice
+    container_name: notification-service
     build:
       context: ./NotificationService/NotificationService.Api
       dockerfile: Dockerfile
-    ports:
-      - "5004:8080"
+    expose:
+      - "8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
